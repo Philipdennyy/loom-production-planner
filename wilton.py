@@ -20,26 +20,26 @@ st.set_page_config(
 # ============================================================
 
 DEFAULT_SETTINGS = pd.DataFrame([
-    {"Use": True,  "Loom": "ALT1",  "Weekly Capacity": 1500, "Starting Week": 33},
-    {"Use": True,  "Loom": "ALT2",  "Weekly Capacity": 1200, "Starting Week": 33},
-    {"Use": True,  "Loom": "ALT4",  "Weekly Capacity": 800,  "Starting Week": 34},
-    {"Use": True,  "Loom": "ALT5",  "Weekly Capacity": 1300, "Starting Week": 33},
-    {"Use": True,  "Loom": "ALT6",  "Weekly Capacity": 800,  "Starting Week": 33},
+    {"Use": True, "Loom": "ALT1", "Weekly Capacity": 1500, "Starting Week": 33},
+    {"Use": True, "Loom": "ALT2", "Weekly Capacity": 1200, "Starting Week": 33},
+    {"Use": True, "Loom": "ALT4", "Weekly Capacity": 800, "Starting Week": 34},
+    {"Use": True, "Loom": "ALT5", "Weekly Capacity": 1300, "Starting Week": 33},
+    {"Use": True, "Loom": "ALT6", "Weekly Capacity": 800, "Starting Week": 33},
 
-    {"Use": True,  "Loom": "RP1",   "Weekly Capacity": 500,  "Starting Week": 33},
-    {"Use": True,  "Loom": "RP2",   "Weekly Capacity": 700,  "Starting Week": 33},
-    {"Use": True,  "Loom": "RP3",   "Weekly Capacity": 900,  "Starting Week": 33},
-    {"Use": True,  "Loom": "RP4",   "Weekly Capacity": 900,  "Starting Week": 33},
-    {"Use": True,  "Loom": "RP5",   "Weekly Capacity": 1100, "Starting Week": 33},
-    {"Use": True,  "Loom": "RP6",   "Weekly Capacity": 1200, "Starting Week": 33},
-    {"Use": True,  "Loom": "RP7",   "Weekly Capacity": 1000, "Starting Week": 33},
+    {"Use": True, "Loom": "RP1", "Weekly Capacity": 500, "Starting Week": 33},
+    {"Use": True, "Loom": "RP2", "Weekly Capacity": 700, "Starting Week": 33},
+    {"Use": True, "Loom": "RP3", "Weekly Capacity": 900, "Starting Week": 33},
+    {"Use": True, "Loom": "RP4", "Weekly Capacity": 900, "Starting Week": 33},
+    {"Use": True, "Loom": "RP5", "Weekly Capacity": 1100, "Starting Week": 33},
+    {"Use": True, "Loom": "RP6", "Weekly Capacity": 1200, "Starting Week": 33},
+    {"Use": True, "Loom": "RP7", "Weekly Capacity": 1000, "Starting Week": 33},
 
-    {"Use": True,  "Loom": "DB4M1", "Weekly Capacity": 300,  "Starting Week": 33},
+    {"Use": True, "Loom": "DB4M1", "Weekly Capacity": 300, "Starting Week": 33},
 ])
 
 
 # ============================================================
-# INITIALIZE SETTINGS
+# INITIALIZE SESSION STATE
 # ============================================================
 
 if "loom_settings" not in st.session_state:
@@ -129,7 +129,7 @@ edited_settings = st.data_editor(
             "Starting Week",
             help="Week number from which this loom should start.",
             min_value=1,
-            max_value=53,
+            max_value=52,
             step=1
         )
     },
@@ -146,7 +146,6 @@ if st.button("🔄 Reset to Default Settings"):
 
     st.session_state.loom_settings = DEFAULT_SETTINGS.copy()
 
-    # Remove editor state so the new values are displayed
     if "loom_settings_editor" in st.session_state:
         del st.session_state["loom_settings_editor"]
 
@@ -201,6 +200,25 @@ if run_button:
 
         starting_week = int(row["Starting Week"])
 
+        # Safety check
+        if starting_week < 1 or starting_week > 52:
+
+            st.error(
+                f"Invalid starting week for {loom}. "
+                "Starting week must be between 1 and 52."
+            )
+
+            st.stop()
+
+        if capacity <= 0:
+
+            st.error(
+                f"Invalid capacity for {loom}. "
+                "Capacity must be greater than 0."
+            )
+
+            st.stop()
+
         loom_settings[loom] = {
             "use": use_loom,
             "capacity": capacity,
@@ -222,7 +240,9 @@ if run_button:
 
     except Exception as e:
 
-        st.error(f"Unable to open the Excel file: {e}")
+        st.error(
+            f"Unable to open the Excel file: {e}"
+        )
 
         st.stop()
 
@@ -273,9 +293,7 @@ if run_button:
     ).value = "Production Week"
 
 
-    # Clear existing values in H
-    # This makes the program safe even if an old output
-    # file is uploaded again.
+    # Clear existing Production Week values
 
     for row in range(2, worksheet.max_row + 1):
 
@@ -286,7 +304,7 @@ if run_button:
 
 
     # ========================================================
-    # PROCESS EACH LOOM
+    # PROCESS EACH LOOM INDEPENDENTLY
     # ========================================================
 
     summary = []
@@ -318,7 +336,10 @@ if run_button:
         # Go through Excel rows in ORIGINAL ORDER
         # ----------------------------------------------------
 
-        for excel_row in range(2, worksheet.max_row + 1):
+        for excel_row in range(
+            2,
+            worksheet.max_row + 1
+        ):
 
             excel_loom = worksheet.cell(
                 row=excel_row,
@@ -357,7 +378,9 @@ if run_button:
                 continue
 
 
+            # ------------------------------------------------
             # Convert quantity to number
+            # ------------------------------------------------
 
             try:
 
@@ -374,7 +397,7 @@ if run_button:
 
             if current_load + quantity <= capacity:
 
-                # Fits in current week
+                # Quantity fits in current week
 
                 assigned_week = current_week
 
@@ -383,20 +406,29 @@ if run_button:
 
             else:
 
-                 # Move to next week
-                 current_week += 1
+                # ------------------------------------------------
+                # Move entire order to next week
+                # ------------------------------------------------
 
-                 # After Week 52, restart from Week 1
-                 if current_week > 52:
-                 current_week = 1
+                current_week += 1
 
-                 assigned_week = current_week
 
-                 current_load = quantity
+                # ------------------------------------------------
+                # WEEK 52 → WEEK 1
+                # ------------------------------------------------
+
+                if current_week > 52:
+
+                    current_week = 1
+
+
+                assigned_week = current_week
+
+                current_load = quantity
 
 
             # ------------------------------------------------
-            # Write production week
+            # Write Production Week
             # ------------------------------------------------
 
             worksheet.cell(
@@ -411,7 +443,7 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # Add summary
+        # Add loom summary
         # ----------------------------------------------------
 
         if rows_processed > 0:
@@ -457,7 +489,7 @@ if run_button:
 
 
     # ========================================================
-    # SUMMARY
+    # PLANNING SUMMARY
     # ========================================================
 
     st.subheader("📊 Planning Summary")
