@@ -383,16 +383,16 @@ if run_button:
 
             else:
 
-                # Move to next week
-                current_week += 1
+                 # Move to next week
+                 current_week += 1
 
-                # After Week 52, restart from Week 1
-                if current_week > 52:
-                current_week = 1
+                 # After Week 52, restart from Week 1
+                 if current_week > 52:
+                 current_week = 1
 
-                assigned_week = current_week
+                 assigned_week = current_week
 
-                current_load = quantity
+                 current_load = quantity
 
 
             # ------------------------------------------------
