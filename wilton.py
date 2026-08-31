@@ -40,12 +40,18 @@ DEFAULT_SETTINGS = pd.DataFrame([
 ])
 
 
+# ============================================================
+# SESSION STATE
+# ============================================================
+
 if "loom_settings" not in st.session_state:
-    st.session_state.loom_settings = DEFAULT_SETTINGS.copy()
+    st.session_state.loom_settings = (
+        DEFAULT_SETTINGS.copy()
+    )
 
 
 # ============================================================
-# BASIC HELPERS
+# HELPER FUNCTIONS
 # ============================================================
 
 def clean_loom(value):
@@ -79,46 +85,28 @@ def get_quantity(value):
 
 
 # ============================================================
-# COMPANY WEEK CALENDAR
+# COMPANY PRODUCTION CALENDAR
 # ============================================================
 #
-# IMPORTANT:
-#
-# This is NOT ISO week logic.
-#
-# Company's calendar:
-#
 # Week 1:
-#     January 1 until the first Sunday
+#     January 1 -> first Sunday
 #
-# Week 2:
-#     First Monday until Sunday
+# Week 2 onward:
+#     Monday -> Sunday
 #
-# Week 3:
-#     Following Monday until Sunday
+# Example 2026:
 #
-# ...
+# WK-32 = 03-Aug -> 09-Aug
+# WK-33 = 10-Aug -> 16-Aug
+# WK-34 = 17-Aug -> 23-Aug
+# WK-35 = 24-Aug -> 30-Aug
+# WK-36 = 31-Aug -> 06-Sep
 #
-# This produces:
-#
-# 2026:
-#
-# WK-32 -> 03-Aug to 09-Aug
-# WK-33 -> 10-Aug to 16-Aug
-# WK-34 -> 17-Aug to 23-Aug
-# WK-35 -> 24-Aug to 30-Aug
-# WK-36 -> 31-Aug to 06-Sep
-#
-# No date is hardcoded.
-#
+# No specific date is hardcoded.
 # ============================================================
 
 
 def get_first_monday(year):
-
-    """
-    Find the first Monday on or after January 1.
-    """
 
     jan_1 = date(
         year,
@@ -142,16 +130,6 @@ def get_current_production_week(
     target_date
 ):
 
-    """
-    Determine the company's production week
-    from an actual calendar date.
-
-    Week 1 starts on January 1.
-
-    After the first Sunday,
-    weeks run Monday-Sunday.
-    """
-
     year = target_date.year
 
     jan_1 = date(
@@ -164,19 +142,14 @@ def get_current_production_week(
         year
     )
 
-
     # --------------------------------------------------------
-    # January 1 until the first Sunday = Week 1
+    # Jan 1 until first Monday = Week 1
     # --------------------------------------------------------
 
     if target_date < first_monday:
 
         return 1
 
-
-    # --------------------------------------------------------
-    # Every following Monday-Sunday = next week
-    # --------------------------------------------------------
 
     days_difference = (
         target_date
@@ -191,9 +164,7 @@ def get_current_production_week(
 
 
     # --------------------------------------------------------
-    # Company has Week 1-52.
-    #
-    # The remaining end-of-year dates stay in Week 52.
+    # Company uses Week 1-52
     # --------------------------------------------------------
 
     return min(
@@ -207,21 +178,16 @@ def get_week_start_date(
     year
 ):
 
-    """
-    Convert company production week
-    into its Monday/start date.
-
-    Week 1 starts on January 1.
-
-    For Week 2 onward, weeks start Monday.
-    """
-
     production_week = int(
         production_week
     )
 
 
-    if production_week <= 1:
+    # --------------------------------------------------------
+    # Week 1 begins on January 1
+    # --------------------------------------------------------
+
+    if production_week == 1:
 
         return date(
             year,
@@ -254,7 +220,6 @@ def get_week_end_date(
     )
 
 
-    # Week 1 ends on the first Sunday.
     if production_week == 1:
 
         days_until_sunday = (
@@ -277,24 +242,17 @@ def get_week_end_date(
     )
 
 
-# ============================================================
-# MOVE TO NEXT PRODUCTION WEEK
-# ============================================================
-
 def move_to_next_week(
     current_week,
     current_year
 ):
 
-    """
-    Move from one production week to the next.
-
-    WK-52 -> WK-1 of next year.
-    """
-
     if current_week >= 52:
 
-        return 1, current_year + 1
+        return (
+            1,
+            current_year + 1
+        )
 
     return (
         current_week + 1,
@@ -303,7 +261,7 @@ def move_to_next_week(
 
 
 # ============================================================
-# BALANCED DAILY DISTRIBUTION
+# DAILY PRODUCT DISTRIBUTION
 # ============================================================
 
 def distribute_products_across_week(
@@ -313,51 +271,35 @@ def distribute_products_across_week(
 ):
 
     """
-    Distribute complete products across the available
-    production days.
+    Distributes complete product rows across the week.
 
     Rules:
-
     - No daily capacity.
     - Product quantity is NEVER split.
     - Excel order is preserved.
-    - External Document No. does not affect order.
-    - Try to balance total quantity across the week.
+    - External Document No. is NOT used for sorting.
+    - Attempts to balance total quantity across days.
     """
 
     if not rows:
         return {}
 
 
-    # --------------------------------------------------------
-    # Determine number of working days.
-    #
-    # Currently all seven days are working.
-    # Sunday exceptions can be added later.
-    # --------------------------------------------------------
-
     number_of_days = (
-        (week_end_date - week_start_date).days
-        + 1
-    )
+        week_end_date
+        - week_start_date
+    ).days + 1
 
-
-    # --------------------------------------------------------
-    # Safety.
-    # --------------------------------------------------------
 
     if number_of_days <= 0:
-
         return {}
 
 
-    number_of_rows = len(
-        rows
-    )
+    number_of_rows = len(rows)
 
 
     # --------------------------------------------------------
-    # If number of products <= number of days,
+    # If there are fewer products than days,
     # assign sequentially.
     # --------------------------------------------------------
 
@@ -371,17 +313,14 @@ def distribute_products_across_week(
             quantity
         ) in enumerate(rows):
 
-            assigned_date = (
+            result[
+                excel_row
+            ] = (
                 week_start_date
                 + timedelta(
                     days=index
                 )
             )
-
-
-            result[
-                excel_row
-            ] = assigned_date
 
 
         return result
@@ -419,21 +358,15 @@ def distribute_products_across_week(
 
     # ========================================================
     # Dynamic programming
-    #
-    # Divide products into consecutive groups.
-    #
-    # No product is split.
     # ========================================================
 
     INF = float("inf")
 
 
     dp = [
-
         [INF] * (
             number_of_rows + 1
         )
-
         for _ in range(
             number_of_days + 1
         )
@@ -441,11 +374,9 @@ def distribute_products_across_week(
 
 
     parent = [
-
         [None] * (
             number_of_rows + 1
         )
-
         for _ in range(
             number_of_days + 1
         )
@@ -455,28 +386,27 @@ def distribute_products_across_week(
     dp[0][0] = 0.0
 
 
-    for day in range(
+    for day_number in range(
         1,
         number_of_days + 1
     ):
 
         for end in range(
-            day,
+            day_number,
             number_of_rows + 1
         ):
 
             for start in range(
-                day - 1,
+                day_number - 1,
                 end
             ):
 
                 previous_cost = dp[
-                    day - 1
+                    day_number - 1
                 ][start]
 
 
                 if previous_cost == INF:
-
                     continue
 
 
@@ -505,21 +435,21 @@ def distribute_products_across_week(
 
 
                 if total_cost < dp[
-                    day
+                    day_number
                 ][end]:
 
                     dp[
-                        day
+                        day_number
                     ][end] = total_cost
 
 
                     parent[
-                        day
+                        day_number
                     ][end] = start
 
 
     # ========================================================
-    # Recover groups
+    # Recover boundaries
     # ========================================================
 
     boundaries = []
@@ -527,19 +457,18 @@ def distribute_products_across_week(
     end = number_of_rows
 
 
-    for day in range(
+    for day_number in range(
         number_of_days,
         0,
         -1
     ):
 
         start = parent[
-            day
+            day_number
         ][end]
 
 
         if start is None:
-
             break
 
 
@@ -567,9 +496,7 @@ def distribute_products_across_week(
     for day_index, (
         start,
         end
-    ) in enumerate(
-        boundaries
-    ):
+    ) in enumerate(boundaries):
 
         assigned_date = (
             week_start_date
@@ -606,13 +533,13 @@ st.title(
 )
 
 st.write(
-    "Automatically plan production using the current "
-    "production week, loom capacity and Excel row order."
+    "Automatically plan loom production using the current "
+    "production week, weekly capacity and Excel row order."
 )
 
 
 # ============================================================
-# CURRENT DATE / WEEK
+# AUTOMATIC CURRENT WEEK
 # ============================================================
 
 today = date.today()
@@ -641,11 +568,15 @@ current_week_end = (
 )
 
 
+# ============================================================
+# DISPLAY CURRENT WEEK
+# ============================================================
+
 st.info(
     f"📅 Today: "
     f"{today.strftime('%d-%m-%Y')}"
     f"   |   "
-    f"Production Week: "
+    f"Current Production Week: "
     f"WK-{current_week}"
     f"   |   "
     f"Week: "
@@ -680,10 +611,22 @@ st.subheader(
 
 
 st.caption(
-    "Starting production week is automatically determined "
-    "from today's date."
+    "Production week is automatically determined from "
+    "today's date. There is no manual week entry."
 )
 
+
+# ============================================================
+# IMPORTANT:
+#
+# ONLY THESE THREE COLUMNS ARE SHOWN:
+#
+# Use
+# Loom
+# Weekly Capacity
+#
+# NO STARTING WEEK.
+# ============================================================
 
 edited_settings = st.data_editor(
 
@@ -719,7 +662,7 @@ edited_settings = st.data_editor(
 
 
 # ============================================================
-# RESET
+# RESET SETTINGS
 # ============================================================
 
 if st.button(
@@ -734,7 +677,7 @@ if st.button(
 
 
 # ============================================================
-# RUN BUTTON
+# RUN
 # ============================================================
 
 st.divider()
@@ -767,16 +710,18 @@ if run_button:
 
 
     # ========================================================
-    # CURRENT PRODUCTION WEEK
+    # AUTOMATIC STARTING WEEK
     # ========================================================
 
     planning_today = date.today()
+
 
     starting_week = (
         get_current_production_week(
             planning_today
         )
     )
+
 
     starting_year = (
         planning_today.year
@@ -830,7 +775,7 @@ if run_button:
 
 
     # ========================================================
-    # LOAD WORKBOOK
+    # LOAD EXCEL
     # ========================================================
 
     try:
@@ -875,7 +820,6 @@ if run_button:
     # E = Roll Length
     # F = Quantity
     # G = Loom
-    #
     # H = Production Week
     # I = Production Date
     # J = Day
@@ -913,7 +857,7 @@ if run_button:
 
 
     # ========================================================
-    # CLEAR PREVIOUS OUTPUT
+    # CLEAR OLD OUTPUT
     # ========================================================
 
     for row in range(
@@ -940,16 +884,14 @@ if run_button:
 
 
     # ========================================================
-    # READ LOOM ROWS
+    # READ ROWS IN ORIGINAL EXCEL ORDER
     # ========================================================
     #
     # VERY IMPORTANT:
     #
-    # We read Excel from top to bottom.
+    # There is NO sorting here.
     #
-    # There is NO sorting.
-    #
-    # External Document No. is NOT used.
+    # External Document No. is ignored for ordering.
     #
     # ========================================================
 
@@ -999,7 +941,7 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # EXACT EXCEL ORDER.
+        # Keep exact Excel order.
         # ----------------------------------------------------
 
         loom_rows[
@@ -1013,13 +955,12 @@ if run_button:
 
 
     # ========================================================
-    # ASSIGN PRODUCTION WEEKS
+    # ASSIGN WEEKS
     # ========================================================
 
     row_week = {}
 
     row_week_year = {}
-
 
     loom_summary = {}
 
@@ -1037,7 +978,7 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # EVERY LOOM STARTS FROM TODAY'S WEEK.
+        # EVERY LOOM STARTS FROM AUTOMATIC CURRENT WEEK.
         # ----------------------------------------------------
 
         current_week = (
@@ -1058,20 +999,20 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # PROCESS IN EXACT EXCEL ORDER.
+        # PROCESS EXACT EXCEL ORDER.
         # ----------------------------------------------------
 
-        for excel_row, quantity in loom_rows.get(
+        for (
+            excel_row,
+            quantity
+        ) in loom_rows.get(
             loom,
             []
         ):
 
 
             # ------------------------------------------------
-            # Product cannot be split.
-            #
-            # If it doesn't fit, move the ENTIRE product
-            # to the next week.
+            # NEVER SPLIT A PRODUCT.
             # ------------------------------------------------
 
             if (
@@ -1099,7 +1040,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # Assign production week.
+            # Assign week.
             # ------------------------------------------------
 
             row_week[
@@ -1113,7 +1054,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # Update weekly capacity.
+            # Add quantity to weekly load.
             # ------------------------------------------------
 
             current_load += quantity
@@ -1134,10 +1075,6 @@ if run_button:
                     week_key
                 )
 
-
-        # ----------------------------------------------------
-        # Summary.
-        # ----------------------------------------------------
 
         loom_summary[
             loom
@@ -1181,15 +1118,18 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # Group rows by YEAR + WEEK.
+        # Group rows by production week.
         #
-        # Original Excel order remains intact.
+        # This does NOT change their order.
         # ----------------------------------------------------
 
         week_rows = {}
 
 
-        for excel_row, week in row_week.items():
+        for (
+            excel_row,
+            week
+        ) in row_week.items():
 
             excel_loom = clean_loom(
                 worksheet.cell(
@@ -1236,7 +1176,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # NO SORTING.
+            # EXACT ORIGINAL EXCEL ORDER.
             # ------------------------------------------------
 
             week_rows[
@@ -1264,7 +1204,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # Calculate actual calendar dates.
+            # Get actual calendar dates.
             # ------------------------------------------------
 
             week_start = (
@@ -1284,7 +1224,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # Distribute products.
+            # Spread products across the week.
             # ------------------------------------------------
 
             assignments = (
@@ -1310,9 +1250,10 @@ if run_button:
     # WRITE RESULTS
     # ========================================================
 
-    for excel_row, production_week in (
-        row_week.items()
-    ):
+    for (
+        excel_row,
+        production_week
+    ) in row_week.items():
 
         if excel_row not in row_dates:
 
@@ -1373,11 +1314,9 @@ if run_button:
 
 
     # ========================================================
-    # IMPORTANT:
+    # NO SORTING
     #
-    # THERE IS NO SORTING HERE.
-    #
-    # Excel order stays exactly the same.
+    # Original Excel order remains untouched.
     # ========================================================
 
 
