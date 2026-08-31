@@ -39,7 +39,7 @@ DEFAULT_SETTINGS = pd.DataFrame([
 
 
 # ============================================================
-# INITIALIZE SESSION STATE
+# SESSION STATE
 # ============================================================
 
 if "loom_settings" not in st.session_state:
@@ -96,7 +96,7 @@ st.subheader("2️⃣ Loom Settings")
 
 st.caption(
     "Edit the weekly capacity and starting week. "
-    "Uncheck a loom if it should not be used for this planning."
+    "Uncheck a loom if it should not be included."
 )
 
 
@@ -109,7 +109,7 @@ edited_settings = st.data_editor(
 
         "Use": st.column_config.CheckboxColumn(
             "Use",
-            help="Check to include this loom in production planning.",
+            help="Check to include this loom.",
             default=True
         ),
 
@@ -120,14 +120,14 @@ edited_settings = st.data_editor(
 
         "Weekly Capacity": st.column_config.NumberColumn(
             "Weekly Capacity",
-            help="Maximum quantity that can be produced by this loom per week.",
+            help="Maximum production quantity per week.",
             min_value=1,
             step=50
         ),
 
         "Starting Week": st.column_config.NumberColumn(
             "Starting Week",
-            help="Week number from which this loom should start.",
+            help="Week from which this loom should start.",
             min_value=1,
             max_value=52,
             step=1
@@ -174,7 +174,7 @@ run_button = st.button(
 if run_button:
 
     # --------------------------------------------------------
-    # Check Excel upload
+    # Check upload
     # --------------------------------------------------------
 
     if uploaded_file is None:
@@ -185,7 +185,7 @@ if run_button:
 
 
     # --------------------------------------------------------
-    # Create loom configuration
+    # Create loom settings dictionary
     # --------------------------------------------------------
 
     loom_settings = {}
@@ -200,24 +200,26 @@ if run_button:
 
         starting_week = int(row["Starting Week"])
 
-        # Safety check
-        if starting_week < 1 or starting_week > 52:
 
-            st.error(
-                f"Invalid starting week for {loom}. "
-                "Starting week must be between 1 and 52."
-            )
-
-            st.stop()
+        # Validation
 
         if capacity <= 0:
 
             st.error(
-                f"Invalid capacity for {loom}. "
-                "Capacity must be greater than 0."
+                f"Capacity for {loom} must be greater than 0."
             )
 
             st.stop()
+
+
+        if starting_week < 1 or starting_week > 52:
+
+            st.error(
+                f"Starting week for {loom} must be between 1 and 52."
+            )
+
+            st.stop()
+
 
         loom_settings[loom] = {
             "use": use_loom,
@@ -226,9 +228,9 @@ if run_button:
         }
 
 
-    # --------------------------------------------------------
-    # Load workbook
-    # --------------------------------------------------------
+    # ========================================================
+    # LOAD EXCEL
+    # ========================================================
 
     try:
 
@@ -247,18 +249,22 @@ if run_button:
         st.stop()
 
 
-    # --------------------------------------------------------
-    # Check required sheet
-    # --------------------------------------------------------
+    # ========================================================
+    # USE FIRST SHEET
+    # ========================================================
 
+    if not workbook.sheetnames:
 
+        st.error("The Excel file contains no worksheets.")
+
+        st.stop()
 
 
     worksheet = workbook[workbook.sheetnames[0]]
 
 
     # ========================================================
-    # FIXED COLUMN STRUCTURE
+    # FIXED INPUT COLUMNS
     # ========================================================
 
     # A = No.
@@ -268,7 +274,7 @@ if run_button:
     # E = Roll Length
     # F = Quantity
     # G = Loom
-    # H = Production Week
+    # H = Production Week / empty
 
     QUANTITY_COL = 6
     LOOM_COL = 7
@@ -276,27 +282,84 @@ if run_button:
 
 
     # ========================================================
-    # CREATE PRODUCTION WEEK COLUMN
+    # CHECK COLUMN H
     # ========================================================
 
-    worksheet.cell(
+    h_header = worksheet.cell(
         row=1,
         column=PRODUCTION_WEEK_COL
-    ).value = "Production Week"
+    ).value
 
 
-    # Clear existing Production Week values
+    # --------------------------------------------------------
+    # CASE 1:
+    # H already contains Production Week
+    # --------------------------------------------------------
+
+    if (
+        h_header is not None
+        and str(h_header).strip().lower() == "production week"
+    ):
+
+        production_week_col = 8
+
+
+    # --------------------------------------------------------
+    # CASE 2:
+    # H is completely empty
+    # --------------------------------------------------------
+
+    elif all(
+        worksheet.cell(
+            row=row,
+            column=PRODUCTION_WEEK_COL
+        ).value is None
+        for row in range(1, worksheet.max_row + 1)
+    ):
+
+        production_week_col = 8
+
+        worksheet.cell(
+            row=1,
+            column=production_week_col
+        ).value = "Production Week"
+
+
+    # --------------------------------------------------------
+    # CASE 3:
+    # H contains other information
+    # --------------------------------------------------------
+
+    else:
+
+        # Insert a new column H
+        worksheet.insert_cols(8)
+
+        production_week_col = 8
+
+        worksheet.cell(
+            row=1,
+            column=production_week_col
+        ).value = "Production Week"
+
+        # Loom and Quantity remain F and G because the
+        # new column was inserted after them.
+
+
+    # ========================================================
+    # CLEAR PRODUCTION WEEK COLUMN
+    # ========================================================
 
     for row in range(2, worksheet.max_row + 1):
 
         worksheet.cell(
             row=row,
-            column=PRODUCTION_WEEK_COL
+            column=production_week_col
         ).value = None
 
 
     # ========================================================
-    # PROCESS EACH LOOM INDEPENDENTLY
+    # PROCESS LOOMS
     # ========================================================
 
     summary = []
@@ -305,7 +368,7 @@ if run_button:
     for loom, settings in loom_settings.items():
 
         # ----------------------------------------------------
-        # Skip unchecked looms
+        # Skip unchecked loom
         # ----------------------------------------------------
 
         if not settings["use"]:
@@ -325,13 +388,18 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # Go through Excel rows in ORIGINAL ORDER
+        # Process rows in original Excel order
         # ----------------------------------------------------
 
         for excel_row in range(
             2,
             worksheet.max_row + 1
         ):
+
+
+            # -----------------------------------------------
+            # Read loom
+            # -----------------------------------------------
 
             excel_loom = worksheet.cell(
                 row=excel_row,
@@ -344,18 +412,18 @@ if run_button:
             )
 
 
-            # ------------------------------------------------
+            # -----------------------------------------------
             # Only process this loom
-            # ------------------------------------------------
+            # -----------------------------------------------
 
             if cleaned_excel_loom != loom:
 
                 continue
 
 
-            # ------------------------------------------------
-            # Get quantity
-            # ------------------------------------------------
+            # -----------------------------------------------
+            # Read quantity
+            # -----------------------------------------------
 
             quantity = worksheet.cell(
                 row=excel_row,
@@ -363,16 +431,14 @@ if run_button:
             ).value
 
 
-            # Skip blank quantity
-
             if quantity is None:
 
                 continue
 
 
-            # ------------------------------------------------
-            # Convert quantity to number
-            # ------------------------------------------------
+            # -----------------------------------------------
+            # Convert quantity
+            # -----------------------------------------------
 
             try:
 
@@ -383,13 +449,13 @@ if run_button:
                 continue
 
 
-            # ------------------------------------------------
-            # Check whether quantity fits in current week
-            # ------------------------------------------------
+            # =================================================
+            # CAPACITY CHECK
+            # =================================================
 
             if current_load + quantity <= capacity:
 
-                # Quantity fits in current week
+                # Quantity fits current week
 
                 assigned_week = current_week
 
@@ -398,9 +464,8 @@ if run_button:
 
             else:
 
-                # ------------------------------------------------
+                # Quantity doesn't fit
                 # Move entire order to next week
-                # ------------------------------------------------
 
                 current_week += 1
 
@@ -419,13 +484,13 @@ if run_button:
                 current_load = quantity
 
 
-            # ------------------------------------------------
-            # Write Production Week
-            # ------------------------------------------------
+            # =================================================
+            # WRITE PRODUCTION WEEK
+            # =================================================
 
             worksheet.cell(
                 row=excel_row,
-                column=PRODUCTION_WEEK_COL
+                column=production_week_col
             ).value = f"WK-{assigned_week}"
 
 
@@ -434,9 +499,9 @@ if run_button:
             weeks_used.add(assigned_week)
 
 
-        # ----------------------------------------------------
-        # Add loom summary
-        # ----------------------------------------------------
+        # ====================================================
+        # SUMMARY
+        # ====================================================
 
         if rows_processed > 0:
 
@@ -461,7 +526,7 @@ if run_button:
 
 
     # ========================================================
-    # SAVE OUTPUT
+    # SAVE EXCEL TO MEMORY
     # ========================================================
 
     output = BytesIO()
@@ -472,7 +537,7 @@ if run_button:
 
 
     # ========================================================
-    # SUCCESS MESSAGE
+    # SUCCESS
     # ========================================================
 
     st.success(
@@ -481,13 +546,13 @@ if run_button:
 
 
     # ========================================================
-    # PLANNING SUMMARY
+    # SUMMARY
     # ========================================================
 
     st.subheader("📊 Planning Summary")
 
 
-    if len(summary) > 0:
+    if summary:
 
         summary_df = pd.DataFrame(summary)
 
@@ -505,7 +570,7 @@ if run_button:
 
 
     # ========================================================
-    # DOWNLOAD BUTTON
+    # DOWNLOAD
     # ========================================================
 
     st.subheader("4️⃣ Download Result")
