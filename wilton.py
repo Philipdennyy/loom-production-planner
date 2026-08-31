@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
+
 from io import BytesIO
 from datetime import date, timedelta
 from copy import copy
@@ -23,21 +25,84 @@ st.set_page_config(
 # ============================================================
 
 DEFAULT_SETTINGS = pd.DataFrame([
-    {"Use": True, "Loom": "ALT1",  "Weekly Capacity": 1500, "Starting Week": 33},
-    {"Use": True, "Loom": "ALT2",  "Weekly Capacity": 1200, "Starting Week": 33},
-    {"Use": True, "Loom": "ALT4",  "Weekly Capacity": 800,  "Starting Week": 34},
-    {"Use": True, "Loom": "ALT5",  "Weekly Capacity": 1300, "Starting Week": 33},
-    {"Use": True, "Loom": "ALT6",  "Weekly Capacity": 800,  "Starting Week": 33},
-
-    {"Use": True, "Loom": "RP1",   "Weekly Capacity": 500,  "Starting Week": 33},
-    {"Use": True, "Loom": "RP2",   "Weekly Capacity": 700,  "Starting Week": 33},
-    {"Use": True, "Loom": "RP3",   "Weekly Capacity": 900,  "Starting Week": 33},
-    {"Use": True, "Loom": "RP4",   "Weekly Capacity": 900,  "Starting Week": 33},
-    {"Use": True, "Loom": "RP5",   "Weekly Capacity": 1100, "Starting Week": 33},
-    {"Use": True, "Loom": "RP6",   "Weekly Capacity": 1200, "Starting Week": 33},
-    {"Use": True, "Loom": "RP7",   "Weekly Capacity": 1000, "Starting Week": 33},
-
-    {"Use": True, "Loom": "DB4M1", "Weekly Capacity": 300,  "Starting Week": 33},
+    {
+        "Use": True,
+        "Loom": "ALT1",
+        "Weekly Capacity": 1500,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "ALT2",
+        "Weekly Capacity": 1200,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "ALT4",
+        "Weekly Capacity": 800,
+        "Starting Week": 34
+    },
+    {
+        "Use": True,
+        "Loom": "ALT5",
+        "Weekly Capacity": 1300,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "ALT6",
+        "Weekly Capacity": 800,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP1",
+        "Weekly Capacity": 500,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP2",
+        "Weekly Capacity": 700,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP3",
+        "Weekly Capacity": 900,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP4",
+        "Weekly Capacity": 900,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP5",
+        "Weekly Capacity": 1100,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP6",
+        "Weekly Capacity": 1200,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "RP7",
+        "Weekly Capacity": 1000,
+        "Starting Week": 33
+    },
+    {
+        "Use": True,
+        "Loom": "DB4M1",
+        "Weekly Capacity": 300,
+        "Starting Week": 33
+    }
 ])
 
 
@@ -46,20 +111,23 @@ DEFAULT_SETTINGS = pd.DataFrame([
 # ============================================================
 
 if "loom_settings" not in st.session_state:
-    st.session_state.loom_settings = DEFAULT_SETTINGS.copy()
+
+    st.session_state.loom_settings = (
+        DEFAULT_SETTINGS.copy()
+    )
 
 
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
-def clean_loom_name(loom):
+def clean_loom_name(value):
 
-    if loom is None:
+    if value is None:
         return ""
 
     return (
-        str(loom)
+        str(value)
         .strip()
         .upper()
         .replace(" ", "")
@@ -67,12 +135,12 @@ def clean_loom_name(loom):
     )
 
 
-def clean_document_number(doc):
+def clean_document_number(value):
 
-    if doc is None:
+    if value is None:
         return ""
 
-    return str(doc).strip()
+    return str(value).strip()
 
 
 # ============================================================
@@ -99,7 +167,7 @@ def week_difference(start_week, target_week):
 
 
 # ============================================================
-# GET DATE FOR PRODUCTION WEEK
+# WEEK START DATE
 # ============================================================
 
 def get_week_start_date(
@@ -122,7 +190,343 @@ def get_week_start_date(
 
 
 # ============================================================
-# SORT FINAL ROWS
+# BALANCED DATE ASSIGNMENT
+# ============================================================
+
+def assign_balanced_dates(
+    rows,
+    week_start_date
+):
+
+    """
+    rows:
+
+        [
+            (excel_row, quantity, document_sequence),
+            ...
+        ]
+
+    Rules:
+
+    - Maximum 7 days.
+    - No row is split.
+    - Original production/document sequence is preserved.
+    - A document can continue onto another day.
+    - A later document cannot be inserted between rows of
+      an earlier document.
+    - There is NO daily capacity.
+    - Tries to balance the total quantity across the week.
+    """
+
+    if not rows:
+        return {}
+
+
+    number_of_rows = len(rows)
+
+
+    # --------------------------------------------------------
+    # If there are fewer than 7 rows, simply distribute them
+    # sequentially.
+    # --------------------------------------------------------
+
+    if number_of_rows <= 7:
+
+        result = {}
+
+        for index, item in enumerate(rows):
+
+            excel_row = item[0]
+
+            result[
+                excel_row
+            ] = (
+                week_start_date
+                + timedelta(days=index)
+            )
+
+        return result
+
+
+    # --------------------------------------------------------
+    # Quantities
+    # --------------------------------------------------------
+
+    quantities = [
+        float(item[1])
+        for item in rows
+    ]
+
+
+    total_quantity = sum(
+        quantities
+    )
+
+
+    ideal_daily_quantity = (
+        total_quantity / 7
+    )
+
+
+    # --------------------------------------------------------
+    # Prefix sums
+    # --------------------------------------------------------
+
+    prefix = [0.0]
+
+
+    for quantity in quantities:
+
+        prefix.append(
+            prefix[-1] + quantity
+        )
+
+
+    # --------------------------------------------------------
+    # Dynamic programming
+    #
+    # Divide the sequence into 7 consecutive groups.
+    #
+    # This is important:
+    #
+    # rows cannot be reordered.
+    #
+    # Therefore External Document sequence remains intact.
+    # --------------------------------------------------------
+
+    INF = float("inf")
+
+
+    dp = [
+
+        [INF] * (number_of_rows + 1)
+
+        for _ in range(8)
+    ]
+
+
+    parent = [
+
+        [None] * (number_of_rows + 1)
+
+        for _ in range(8)
+    ]
+
+
+    dp[0][0] = 0.0
+
+
+    # --------------------------------------------------------
+    # Calculate best partition
+    # --------------------------------------------------------
+
+    for day_count in range(
+        1,
+        8
+    ):
+
+        for end_row in range(
+            day_count,
+            number_of_rows + 1
+        ):
+
+            for start_row in range(
+                day_count - 1,
+                end_row
+            ):
+
+                previous_cost = dp[
+                    day_count - 1
+                ][start_row]
+
+
+                if previous_cost == INF:
+                    continue
+
+
+                day_quantity = (
+                    prefix[end_row]
+                    - prefix[start_row]
+                )
+
+
+                difference = (
+                    day_quantity
+                    - ideal_daily_quantity
+                )
+
+
+                cost = (
+                    difference
+                    * difference
+                )
+
+
+                total_cost = (
+                    previous_cost
+                    + cost
+                )
+
+
+                if total_cost < dp[
+                    day_count
+                ][end_row]:
+
+                    dp[
+                        day_count
+                    ][end_row] = (
+                        total_cost
+                    )
+
+
+                    parent[
+                        day_count
+                    ][end_row] = (
+                        start_row
+                    )
+
+
+    # --------------------------------------------------------
+    # Use 7 days
+    # --------------------------------------------------------
+
+    days_to_use = min(
+        7,
+        number_of_rows
+    )
+
+
+    # --------------------------------------------------------
+    # Recover groups
+    # --------------------------------------------------------
+
+    boundaries = []
+
+
+    end_row = number_of_rows
+
+
+    for day_count in range(
+        days_to_use,
+        0,
+        -1
+    ):
+
+        start_row = parent[
+            day_count
+        ][end_row]
+
+
+        if start_row is None:
+
+            # Safety fallback
+
+            boundaries = []
+
+
+            rows_per_day = (
+                number_of_rows
+                // days_to_use
+            )
+
+
+            remainder = (
+                number_of_rows
+                % days_to_use
+            )
+
+
+            current = 0
+
+
+            for d in range(
+                days_to_use
+            ):
+
+                extra = (
+                    1
+                    if d < remainder
+                    else 0
+                )
+
+
+                start = current
+
+                end = (
+                    current
+                    + rows_per_day
+                    + extra
+                )
+
+
+                boundaries.append(
+                    (start, end)
+                )
+
+
+                current = end
+
+
+            break
+
+
+        boundaries.append(
+            (
+                start_row,
+                end_row
+            )
+        )
+
+
+        end_row = start_row
+
+
+    if boundaries:
+
+        boundaries.reverse()
+
+
+    # --------------------------------------------------------
+    # Assign dates
+    # --------------------------------------------------------
+
+    result = {}
+
+
+    for day_index, (
+        start_row,
+        end_row
+    ) in enumerate(boundaries):
+
+
+        assigned_date = (
+            week_start_date
+            + timedelta(
+                days=day_index
+            )
+        )
+
+
+        for row_index in range(
+            start_row,
+            end_row
+        ):
+
+            excel_row = rows[
+                row_index
+            ][0]
+
+
+            result[
+                excel_row
+            ] = assigned_date
+
+
+    return result
+
+
+# ============================================================
+# SORT FINAL EXCEL
 # ============================================================
 
 def sort_planned_rows(
@@ -131,11 +535,12 @@ def sort_planned_rows(
     loom_col,
     document_col,
     production_week_col,
-    production_date_col
+    production_date_col,
+    row_sequence
 ):
 
     """
-    Final sorting order:
+    Final sorting:
 
     Loom
         ↓
@@ -143,11 +548,12 @@ def sort_planned_rows(
         ↓
     Production Date
         ↓
-    External Document No.
+    Original document sequence
         ↓
-    Original row order
+    Original row
 
-    Complete Excel rows are moved together.
+    row_sequence is created during planning so that
+    External Document order is preserved.
     """
 
     # --------------------------------------------------------
@@ -159,23 +565,32 @@ def sort_planned_rows(
         for rng in worksheet.merged_cells.ranges
     ]
 
+
     # --------------------------------------------------------
-    # Temporarily remove merged cells
+    # Temporarily unmerge
     # --------------------------------------------------------
 
     for rng in list(
         worksheet.merged_cells.ranges
     ):
 
-        worksheet.unmerge_cells(
-            str(rng)
-        )
+        try:
+
+            worksheet.unmerge_cells(
+                str(rng)
+            )
+
+        except Exception:
+
+            pass
+
 
     # --------------------------------------------------------
     # Loom order
     # --------------------------------------------------------
 
     loom_order = {}
+
 
     for index, loom in enumerate(
         loom_settings.keys()
@@ -185,11 +600,13 @@ def sort_planned_rows(
             clean_loom_name(loom)
         ] = index
 
+
     # --------------------------------------------------------
-    # Collect row information
+    # Collect rows
     # --------------------------------------------------------
 
     rows = []
+
 
     for row_number in range(
         2,
@@ -203,28 +620,25 @@ def sort_planned_rows(
             ).value
         )
 
-        document = clean_document_number(
-            worksheet.cell(
-                row=row_number,
-                column=document_col
-            ).value
-        )
 
         week_value = worksheet.cell(
             row=row_number,
             column=production_week_col
         ).value
 
+
         date_value = worksheet.cell(
             row=row_number,
             column=production_date_col
         ).value
 
+
         # ----------------------------------------------------
-        # Week number
+        # Week
         # ----------------------------------------------------
 
         week_number = None
+
 
         if week_value is not None:
 
@@ -240,9 +654,6 @@ def sort_planned_rows(
 
                 week_number = None
 
-        # ----------------------------------------------------
-        # Starting week for loom
-        # ----------------------------------------------------
 
         starting_week = loom_settings.get(
             loom,
@@ -252,9 +663,6 @@ def sort_planned_rows(
             1
         )
 
-        # ----------------------------------------------------
-        # Week ranking
-        # ----------------------------------------------------
 
         if week_number is not None:
 
@@ -267,33 +675,42 @@ def sort_planned_rows(
 
             week_rank = 999
 
+
         # ----------------------------------------------------
-        # Date ranking
+        # Date
         # ----------------------------------------------------
 
         if date_value is not None:
 
             try:
 
-                date_sort_value = pd.to_datetime(
+                date_sort = pd.to_datetime(
                     date_value
                 )
 
             except:
 
-                date_sort_value = pd.Timestamp.max
+                date_sort = pd.Timestamp.max
 
         else:
 
-            date_sort_value = pd.Timestamp.max
+            date_sort = pd.Timestamp.max
+
+
+        # ----------------------------------------------------
+        # Planning sequence
+        # ----------------------------------------------------
+
+        sequence = row_sequence.get(
+            row_number,
+            999999999
+        )
+
 
         rows.append({
 
             "original_row":
                 row_number,
-
-            "loom":
-                loom,
 
             "loom_rank":
                 loom_order.get(
@@ -305,11 +722,12 @@ def sort_planned_rows(
                 week_rank,
 
             "date":
-                date_sort_value,
+                date_sort,
 
-            "document":
-                document
+            "sequence":
+                sequence
         })
+
 
     # --------------------------------------------------------
     # Sort
@@ -320,17 +738,21 @@ def sort_planned_rows(
             x["loom_rank"],
             x["week_rank"],
             x["date"],
+            x["sequence"],
             x["original_row"]
         )
     )
 
+
     # --------------------------------------------------------
-    # Store complete row data
+    # Save row data
     # --------------------------------------------------------
 
     max_col = worksheet.max_column
 
+
     row_data = {}
+
 
     for item in rows:
 
@@ -338,9 +760,11 @@ def sort_planned_rows(
             "original_row"
         ]
 
+
         row_data[
             original_row
         ] = []
+
 
         for col in range(
             1,
@@ -351,6 +775,7 @@ def sort_planned_rows(
                 row=original_row,
                 column=col
             )
+
 
             row_data[
                 original_row
@@ -387,6 +812,7 @@ def sort_planned_rows(
                     cell.comment
             })
 
+
     # --------------------------------------------------------
     # Rewrite rows
     # --------------------------------------------------------
@@ -400,6 +826,7 @@ def sort_planned_rows(
             "original_row"
         ]
 
+
         for col in range(
             1,
             max_col + 1
@@ -409,50 +836,70 @@ def sort_planned_rows(
                 original_row
             ][col - 1]
 
+
             target = worksheet.cell(
                 row=new_row,
                 column=col
             )
 
-            target.value = source[
-                "value"
-            ]
+
+            if isinstance(
+                target,
+                MergedCell
+            ):
+
+                continue
+
+
+            target.value = (
+                source["value"]
+            )
+
 
             target._style = copy(
                 source["style"]
             )
 
+
             target.number_format = (
                 source["number_format"]
             )
+
 
             target.font = copy(
                 source["font"]
             )
 
+
             target.fill = copy(
                 source["fill"]
             )
+
 
             target.border = copy(
                 source["border"]
             )
 
+
             target.alignment = copy(
                 source["alignment"]
             )
+
 
             target.protection = copy(
                 source["protection"]
             )
 
+
             target.hyperlink = (
                 source["hyperlink"]
             )
 
+
             target.comment = (
                 source["comment"]
             )
+
 
     # --------------------------------------------------------
     # Restore merged ranges
@@ -479,10 +926,11 @@ st.title(
     "🏭 Loom Production Planner"
 )
 
+
 st.write(
-    "Automatically assign production weeks and dates "
-    "based on loom capacity, external document sequence "
-    "and production quantity."
+    "Plan loom production automatically using weekly "
+    "capacity, production weeks, external document sequence "
+    "and production dates."
 )
 
 
@@ -493,6 +941,7 @@ st.write(
 st.subheader(
     "1️⃣ Upload Production Excel"
 )
+
 
 uploaded_file = st.file_uploader(
     "Select the Excel file",
@@ -508,14 +957,16 @@ st.subheader(
     "2️⃣ Planning Start Date"
 )
 
+
 planning_start_date = st.date_input(
     "Select the starting date",
     value=date.today()
 )
 
+
 st.caption(
-    "The selected date is the first day of the starting "
-    "production week."
+    "This is the first production date of the selected "
+    "starting production week."
 )
 
 
@@ -527,10 +978,12 @@ st.subheader(
     "3️⃣ Loom Settings"
 )
 
+
 st.caption(
-    "Enable/disable looms and edit weekly capacity "
-    "and starting week."
+    "Enable or disable looms and edit their weekly "
+    "capacity and starting week."
 )
+
 
 edited_settings = st.data_editor(
 
@@ -545,7 +998,7 @@ edited_settings = st.data_editor(
         "Use":
             st.column_config.CheckboxColumn(
                 "Use",
-                help="Include this loom in planning.",
+                help="Include this loom.",
                 default=True
             ),
 
@@ -558,7 +1011,10 @@ edited_settings = st.data_editor(
         "Weekly Capacity":
             st.column_config.NumberColumn(
                 "Weekly Capacity",
-                help="Maximum quantity per week.",
+                help=(
+                    "Maximum quantity that can be "
+                    "allocated to the loom in one week."
+                ),
                 min_value=1,
                 step=50
             ),
@@ -566,12 +1022,15 @@ edited_settings = st.data_editor(
         "Starting Week":
             st.column_config.NumberColumn(
                 "Starting Week",
-                help="Starting production week.",
+                help=(
+                    "Production week in which "
+                    "this loom starts."
+                ),
                 min_value=1,
                 max_value=52,
                 step=1
             )
-    },
+        },
 
     key="loom_settings_editor"
 )
@@ -602,10 +1061,11 @@ if st.button(
 
 
 # ============================================================
-# RUN
+# RUN BUTTON
 # ============================================================
 
 st.divider()
+
 
 run_button = st.button(
     "🚀 Run Production Planning",
@@ -621,7 +1081,7 @@ run_button = st.button(
 if run_button:
 
     # ========================================================
-    # CHECK FILE
+    # FILE CHECK
     # ========================================================
 
     if uploaded_file is None:
@@ -632,11 +1092,13 @@ if run_button:
 
         st.stop()
 
+
     # ========================================================
-    # LOOM SETTINGS
+    # CREATE LOOM SETTINGS
     # ========================================================
 
     loom_settings = {}
+
 
     for _, row in edited_settings.iterrows():
 
@@ -644,17 +1106,21 @@ if run_button:
             row["Loom"]
         )
 
+
         use_loom = bool(
             row["Use"]
         )
+
 
         capacity = float(
             row["Weekly Capacity"]
         )
 
+
         starting_week = int(
             row["Starting Week"]
         )
+
 
         if capacity <= 0:
 
@@ -664,6 +1130,7 @@ if run_button:
             )
 
             st.stop()
+
 
         if (
             starting_week < 1
@@ -678,6 +1145,7 @@ if run_button:
 
             st.stop()
 
+
         loom_settings[
             loom
         ] = {
@@ -691,6 +1159,7 @@ if run_button:
             "starting_week":
                 starting_week
         }
+
 
     # ========================================================
     # LOAD EXCEL
@@ -712,16 +1181,31 @@ if run_button:
 
         st.stop()
 
+
     # ========================================================
-    # FIRST SHEET
+    # CHECK SHEETS
+    # ========================================================
+
+    if not workbook.sheetnames:
+
+        st.error(
+            "The Excel file contains no worksheets."
+        )
+
+        st.stop()
+
+
+    # ========================================================
+    # USE FIRST SHEET
     # ========================================================
 
     worksheet = workbook[
         workbook.sheetnames[0]
     ]
 
+
     # ========================================================
-    # FIXED INPUT COLUMNS
+    # INPUT COLUMN POSITIONS
     # ========================================================
     #
     # A = No.
@@ -746,22 +1230,24 @@ if run_button:
     PRODUCTION_DATE_COL = 9
     DAY_COL = 10
 
+
     # ========================================================
-    # CREATE / FIND PRODUCTION WEEK COLUMN
+    # CHECK COLUMN H
     # ========================================================
 
-    h_value = worksheet.cell(
+    h_header = worksheet.cell(
         row=1,
         column=8
     ).value
 
+
     if (
 
-        h_value is not None
+        h_header is not None
 
         and
 
-        str(h_value).strip().lower()
+        str(h_header).strip().lower()
         != "production week"
 
     ):
@@ -779,31 +1265,37 @@ if run_button:
             )
         )
 
+
         if h_has_data:
 
-            worksheet.insert_cols(8)
+            worksheet.insert_cols(
+                8
+            )
+
 
     worksheet.cell(
         row=1,
         column=8
     ).value = "Production Week"
 
+
     # ========================================================
-    # CREATE / FIND PRODUCTION DATE COLUMN
+    # CHECK COLUMN I
     # ========================================================
 
-    i_value = worksheet.cell(
+    i_header = worksheet.cell(
         row=1,
         column=9
     ).value
 
+
     if (
 
-        i_value is not None
+        i_header is not None
 
         and
 
-        str(i_value).strip().lower()
+        str(i_header).strip().lower()
         != "production date"
 
     ):
@@ -821,31 +1313,37 @@ if run_button:
             )
         )
 
+
         if i_has_data:
 
-            worksheet.insert_cols(9)
+            worksheet.insert_cols(
+                9
+            )
+
 
     worksheet.cell(
         row=1,
         column=9
     ).value = "Production Date"
 
+
     # ========================================================
-    # CREATE / FIND DAY COLUMN
+    # CHECK COLUMN J
     # ========================================================
 
-    j_value = worksheet.cell(
+    j_header = worksheet.cell(
         row=1,
         column=10
     ).value
 
+
     if (
 
-        j_value is not None
+        j_header is not None
 
         and
 
-        str(j_value).strip().lower()
+        str(j_header).strip().lower()
         != "day"
 
     ):
@@ -863,17 +1361,22 @@ if run_button:
             )
         )
 
+
         if j_has_data:
 
-            worksheet.insert_cols(10)
+            worksheet.insert_cols(
+                10
+            )
+
 
     worksheet.cell(
         row=1,
         column=10
     ).value = "Day"
 
+
     # ========================================================
-    # CLEAR OLD PLANNING DATA
+    # CLEAR OLD PLANNING OUTPUT
     # ========================================================
 
     for row in range(
@@ -886,41 +1389,45 @@ if run_button:
             column=PRODUCTION_WEEK_COL
         ).value = None
 
+
         worksheet.cell(
             row=row,
             column=PRODUCTION_DATE_COL
         ).value = None
+
 
         worksheet.cell(
             row=row,
             column=DAY_COL
         ).value = None
 
+
     # ========================================================
     # CREATE DOCUMENT GROUPS
     # ========================================================
     #
-    # For each loom:
+    # This is VERY IMPORTANT.
     #
-    # Document 1 rows
-    # Document 2 rows
-    # Document 3 rows
-    #
-    # The order is based on the first appearance
-    # of the document in the original Excel.
+    # The same External Document Number is treated as
+    # one continuous production sequence.
     #
     # ========================================================
 
     loom_documents = {}
 
-    for loom, settings in loom_settings.items():
+
+    for loom, settings in (
+        loom_settings.items()
+    ):
 
         if not settings["use"]:
             continue
 
+
         loom_documents[
             loom
         ] = {}
+
 
         for excel_row in range(
             2,
@@ -934,8 +1441,10 @@ if run_button:
                 ).value
             )
 
+
             if excel_loom != loom:
                 continue
+
 
             document = clean_document_number(
                 worksheet.cell(
@@ -944,16 +1453,25 @@ if run_button:
                 ).value
             )
 
+
+            # If document number is blank,
+            # treat that row as its own document.
+
             if document == "":
+
                 document = (
                     f"ROW-{excel_row}"
                 )
 
-            if document not in loom_documents[loom]:
+
+            if document not in (
+                loom_documents[loom]
+            ):
 
                 loom_documents[
                     loom
                 ][document] = []
+
 
             loom_documents[
                 loom
@@ -961,55 +1479,62 @@ if run_button:
                 excel_row
             )
 
+
     # ========================================================
-    # STORE PLANNING RESULTS
+    # PLANNING STORAGE
     # ========================================================
 
     row_week = {}
+
     row_date = {}
 
+    row_sequence = {}
+
     loom_summary = {}
+
 
     # ========================================================
     # PROCESS EACH LOOM
     # ========================================================
 
-    for loom, settings in loom_settings.items():
+    for loom, settings in (
+        loom_settings.items()
+    ):
 
         if not settings["use"]:
             continue
+
 
         weekly_capacity = (
             settings["capacity"]
         )
 
+
         starting_week = (
             settings["starting_week"]
         )
+
 
         current_week = (
             starting_week
         )
 
+
         current_week_load = 0.0
+
 
         rows_processed = 0
 
+
         weeks_used = []
 
+
         # ----------------------------------------------------
-        # 7-day production schedule
-        #
-        # day 0 = Monday / starting date
-        # day 1 = next day
-        # ...
-        # day 6 = seventh day
-        #
+        # Document sequence
         # ----------------------------------------------------
 
-        current_day_index = 0
+        sequence_counter = 0
 
-        current_day_load = 0.0
 
         # ====================================================
         # PROCESS DOCUMENTS IN ORIGINAL ORDER
@@ -1020,36 +1545,28 @@ if run_button:
             {}
         )
 
+
         for document, document_rows in (
             documents.items()
         ):
 
-            # ------------------------------------------------
-            # Calculate soft daily target.
-            #
-            # This is NOT a daily capacity.
-            #
-            # It is only used to spread production across
-            # the seven days.
-            # ------------------------------------------------
 
-            daily_target = (
-                weekly_capacity / 7
-            )
-
-            # =================================================
-            # PROCESS EVERY ROW OF DOCUMENT
-            # =================================================
+            # ------------------------------------------------
+            # Process every row belonging to this document
+            # ------------------------------------------------
 
             for excel_row in document_rows:
+
 
                 quantity = worksheet.cell(
                     row=excel_row,
                     column=QUANTITY_COL
                 ).value
 
+
                 if quantity is None:
                     continue
+
 
                 try:
 
@@ -1064,17 +1581,19 @@ if run_button:
 
                     continue
 
+
                 if quantity <= 0:
                     continue
+
 
                 # =================================================
                 # WEEKLY CAPACITY
                 # =================================================
                 #
-                # If this complete product doesn't fit into the
-                # remaining weekly capacity, move it to next week.
+                # A row is NEVER split.
                 #
-                # The product is NEVER split.
+                # If it doesn't fit into remaining weekly
+                # capacity, it moves to the next week.
                 #
                 # =================================================
 
@@ -1096,106 +1615,61 @@ if run_button:
                         )
                     )
 
+
                     current_week_load = 0.0
 
-                    current_day_index = 0
-
-                    current_day_load = 0.0
 
                 # ------------------------------------------------
-                # If product itself is larger than weekly capacity
-                # it must still remain complete.
+                # If the individual product itself is larger than
+                # weekly capacity, keep it complete.
                 # ------------------------------------------------
 
                 if quantity > weekly_capacity:
 
                     st.warning(
+
                         f"{loom} - External Document "
                         f"{document}: quantity {quantity} "
                         f"is greater than weekly capacity "
                         f"{weekly_capacity}. "
-                        f"The product will remain unsplit."
+                        "The row will remain unsplit."
                     )
 
-                # =================================================
-                # DATE ALLOCATION
-                # =================================================
-                #
-                # IMPORTANT:
-                #
-                # There is NO hard daily capacity.
-                #
-                # daily_target is only used to distribute work.
-                #
-                # =================================================
-
-                # If current day already has production and adding
-                # this complete product would go beyond the soft
-                # target, move to next day.
-                #
-                # But if we are on day 6, we cannot create another
-                # day inside the same week.
-
-                if (
-
-                    current_day_load > 0
-
-                    and
-
-                    current_day_load
-                    + quantity
-                    > daily_target
-
-                    and
-
-                    current_day_index < 6
-
-                ):
-
-                    current_day_index += 1
-
-                    current_day_load = 0.0
 
                 # ------------------------------------------------
-                # Calculate date
-                # ------------------------------------------------
-
-                week_start_date = (
-                    get_week_start_date(
-                        planning_start_date,
-                        starting_week,
-                        current_week
-                    )
-                )
-
-                assigned_date = (
-                    week_start_date
-                    + timedelta(
-                        days=current_day_index
-                    )
-                )
-
-                # ------------------------------------------------
-                # Store planning
+                # Store week
                 # ------------------------------------------------
 
                 row_week[
                     excel_row
                 ] = current_week
 
-                row_date[
+
+                # ------------------------------------------------
+                # Store document sequence
+                #
+                # This is used later for final sorting.
+                # ------------------------------------------------
+
+                row_sequence[
                     excel_row
-                ] = assigned_date
+                ] = sequence_counter
+
+
+                sequence_counter += 1
+
 
                 # ------------------------------------------------
-                # Update loads
+                # Update weekly load
                 # ------------------------------------------------
 
-                current_week_load += quantity
+                current_week_load += (
+                    quantity
+                )
 
-                current_day_load += quantity
 
                 rows_processed += 1
+
 
                 if current_week not in weeks_used:
 
@@ -1203,80 +1677,182 @@ if run_button:
                         current_week
                     )
 
-                # ------------------------------------------------
-                # If this product pushed the day beyond the
-                # soft target, the NEXT product can move to
-                # the next day.
-                #
-                # This allows:
-                #
-                # DOC1 → 31 Aug
-                # DOC1 → 01 Sep
-                # DOC2 → 01 Sep
-                #
-                # when DOC1 finishes on 01 Sep.
-                # ------------------------------------------------
-
-                if (
-
-                    current_day_load
-                    >= daily_target
-
-                    and
-
-                    current_day_index < 6
-
-                ):
-
-                    current_day_index += 1
-
-                    current_day_load = 0.0
-
-            # =================================================
-            # END OF DOCUMENT
-            # =================================================
-            #
-            # We DO NOT automatically move to the next day.
-            #
-            # Therefore the next document can start on the
-            # same day if there is room according to the
-            # balancing logic.
-            #
-            # =================================================
-
-        # ====================================================
-        # SUMMARY
-        # ====================================================
-
-        loom_summary[
-            loom
-        ] = {
-
-            "capacity":
-                weekly_capacity,
-
-            "starting_week":
-                starting_week,
-
-            "final_week":
-                current_week,
-
-            "rows_processed":
-                rows_processed,
-
-            "weeks_used":
-                weeks_used
-        }
 
     # ========================================================
-    # WRITE RESULTS TO EXCEL
+    # ASSIGN DATES
+    # ========================================================
+    #
+    # We do this AFTER weekly allocation.
+    #
+    # Each week is balanced separately.
+    #
     # ========================================================
 
-    for excel_row, week in row_week.items():
+    for loom, settings in (
+        loom_settings.items()
+    ):
 
-        assigned_date = row_date[
-            excel_row
-        ]
+        if not settings["use"]:
+            continue
+
+
+        starting_week = (
+            settings["starting_week"]
+        )
+
+
+        # ----------------------------------------------------
+        # Group rows by production week
+        # ----------------------------------------------------
+
+        week_rows = {}
+
+
+        for excel_row, assigned_week in (
+            row_week.items()
+        ):
+
+
+            excel_loom = clean_loom_name(
+                worksheet.cell(
+                    row=excel_row,
+                    column=LOOM_COL
+                ).value
+            )
+
+
+            if excel_loom != loom:
+                continue
+
+
+            quantity = worksheet.cell(
+                row=excel_row,
+                column=QUANTITY_COL
+            ).value
+
+
+            if quantity is None:
+                continue
+
+
+            try:
+
+                quantity = float(
+                    quantity
+                )
+
+            except (
+                ValueError,
+                TypeError
+            ):
+
+                continue
+
+
+            if quantity <= 0:
+                continue
+
+
+            if assigned_week not in week_rows:
+
+                week_rows[
+                    assigned_week
+                ] = []
+
+
+            week_rows[
+                assigned_week
+            ].append(
+
+                (
+                    excel_row,
+                    quantity,
+                    row_sequence.get(
+                        excel_row,
+                        999999
+                    )
+                )
+            )
+
+
+        # ----------------------------------------------------
+        # Process each production week
+        # ----------------------------------------------------
+
+        for production_week, rows in (
+            week_rows.items()
+        ):
+
+
+            # ------------------------------------------------
+            # Sort rows by production sequence
+            # ------------------------------------------------
+
+            rows.sort(
+                key=lambda x: x[2]
+            )
+
+
+            # ------------------------------------------------
+            # Starting date of this week
+            # ------------------------------------------------
+
+            week_start_date = (
+                get_week_start_date(
+                    planning_start_date,
+                    starting_week,
+                    production_week
+                )
+            )
+
+
+            # ------------------------------------------------
+            # Balanced date assignment
+            # ------------------------------------------------
+
+            date_assignments = (
+                assign_balanced_dates(
+                    rows,
+                    week_start_date
+                )
+            )
+
+
+            # ------------------------------------------------
+            # Save dates
+            # ------------------------------------------------
+
+            for excel_row, quantity, sequence in rows:
+
+                if excel_row not in date_assignments:
+                    continue
+
+
+                row_date[
+                    excel_row
+                ] = date_assignments[
+                    excel_row
+                ]
+
+
+    # ========================================================
+    # WRITE PRODUCTION DATA TO EXCEL
+    # ========================================================
+
+    for excel_row, week in (
+        row_week.items()
+    ):
+
+        if excel_row not in row_date:
+            continue
+
+
+        assigned_date = (
+            row_date[
+                excel_row
+            ]
+        )
+
 
         # ----------------------------------------------------
         # Production Week
@@ -1289,6 +1865,7 @@ if run_button:
             f"WK-{week}"
         )
 
+
         # ----------------------------------------------------
         # Production Date
         # ----------------------------------------------------
@@ -1300,12 +1877,14 @@ if run_button:
             assigned_date
         )
 
+
         worksheet.cell(
             row=excel_row,
             column=PRODUCTION_DATE_COL
         ).number_format = (
             "DD-MM-YYYY"
         )
+
 
         # ----------------------------------------------------
         # Day
@@ -1320,8 +1899,9 @@ if run_button:
             )
         )
 
+
     # ========================================================
-    # SORT FINAL EXCEL
+    # FINAL SORT
     # ========================================================
 
     try:
@@ -1342,28 +1922,33 @@ if run_button:
 
             production_date_col=(
                 PRODUCTION_DATE_COL
-            )
+            ),
+
+            row_sequence=row_sequence
         )
 
     except Exception as e:
 
         st.warning(
-            "Production planning was completed, "
-            "but final sorting could not be completed: "
-            f"{e}"
+            "Planning was completed, but the final "
+            f"Excel sorting could not be completed: {e}"
         )
 
+
     # ========================================================
-    # SAVE OUTPUT
+    # SAVE
     # ========================================================
 
     output = BytesIO()
+
 
     workbook.save(
         output
     )
 
+
     output.seek(0)
+
 
     # ========================================================
     # SUCCESS
@@ -1373,15 +1958,18 @@ if run_button:
         "✅ Production planning completed successfully!"
     )
 
+
     # ========================================================
-    # SUMMARY
+    # PLANNING SUMMARY
     # ========================================================
 
     st.subheader(
         "📊 Planning Summary"
     )
 
+
     summary_rows = []
+
 
     for loom, info in (
         loom_summary.items()
@@ -1392,6 +1980,7 @@ if run_button:
         ] == 0:
 
             continue
+
 
         summary_rows.append({
 
@@ -1416,24 +2005,29 @@ if run_button:
                 info["rows_processed"]
         })
 
+
     if summary_rows:
 
         summary_df = pd.DataFrame(
             summary_rows
         )
 
+
         st.dataframe(
+
             summary_df,
+
             use_container_width=True,
+
             hide_index=True
         )
 
     else:
 
         st.warning(
-            "No production rows were found "
-            "for the selected looms."
+            "No enabled loom data was found."
         )
+
 
     # ========================================================
     # DOWNLOAD
@@ -1442,6 +2036,7 @@ if run_button:
     st.subheader(
         "4️⃣ Download Result"
     )
+
 
     st.download_button(
 
