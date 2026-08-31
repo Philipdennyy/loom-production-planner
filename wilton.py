@@ -51,6 +51,7 @@ if "loom_settings" not in st.session_state:
 # ============================================================
 
 def clean_loom(value):
+
     if value is None:
         return ""
 
@@ -64,6 +65,7 @@ def clean_loom(value):
 
 
 def clean_document(value):
+
     if value is None:
         return ""
 
@@ -71,6 +73,7 @@ def clean_document(value):
 
 
 def get_quantity(value):
+
     if value is None:
         return None
 
@@ -86,30 +89,22 @@ def get_quantity(value):
 
 
 def next_week(week):
+
     return 1 if week >= 52 else week + 1
 
 
 # ============================================================
-# WEEK -> DATE
+# PRODUCTION WEEK -> DATE
 # ============================================================
 #
-# Production calendar:
+# Uses the normal calendar week system:
 #
-# Week 1 = Jan 1 - Jan 7
-# Week 2 = Jan 8 - Jan 14
-# Week 3 = Jan 15 - Jan 21
-# ...
+# Monday = first day of production week
+# Sunday = last day of production week
 #
-# We use Python datetime here.
-# Therefore:
+# No specific date is hardcoded.
 #
-# Jan = 31 days
-# Feb = 28/29 days
-# Mar = 31 days
-# Apr = 30 days
-# etc.
-#
-# Month boundaries are handled automatically.
+# Python calculates the correct calendar relationship.
 #
 # ============================================================
 
@@ -128,18 +123,66 @@ def get_week_start_date(
     if production_week > 52:
         production_week = 52
 
-    first_day = date(
-        year,
-        1,
-        1
-    )
+    try:
 
-    return (
-        first_day
-        + timedelta(
-            days=(production_week - 1) * 7
+        # ISO calendar:
+        # weekday 1 = Monday
+        return date.fromisocalendar(
+            year,
+            production_week,
+            1
         )
-    )
+
+    except ValueError:
+
+        # Safety fallback for years where the requested
+        # ISO week does not exist.
+        #
+        # This should normally not be reached for the
+        # production weeks being planned.
+
+        first_day = date(
+            year,
+            1,
+            1
+        )
+
+        days_to_monday = (
+            7 - first_day.weekday()
+        ) % 7
+
+        first_monday = (
+            first_day
+            + timedelta(
+                days=days_to_monday
+            )
+        )
+
+        return (
+            first_monday
+            + timedelta(
+                days=(production_week - 1) * 7
+            )
+        )
+
+
+# ============================================================
+# DATE -> PRODUCTION WEEK
+# ============================================================
+
+def get_production_week(
+    production_date
+):
+
+    """
+    Automatically determine the calendar week.
+
+    Monday-Sunday week.
+
+    No hardcoded dates.
+    """
+
+    return production_date.isocalendar().week
 
 
 # ============================================================
@@ -152,16 +195,16 @@ def assign_balanced_dates(
 ):
 
     """
-    Distribute complete products across seven days.
+    Spread complete product rows across the week.
 
     Rules:
     - No daily capacity.
-    - Product quantity is never split.
-    - Original order is preserved.
+    - A product row is NEVER split.
     - External Document order is preserved.
-    - A document can continue to the next day.
-    - Next document can start on the same day.
-    - Try to avoid huge differences between days.
+    - Product order is preserved.
+    - A document can continue into the next day.
+    - Another document can start on the same day.
+    - Try to keep daily quantities reasonably balanced.
     """
 
     if not rows:
@@ -179,7 +222,7 @@ def assign_balanced_dates(
     )
 
     # --------------------------------------------------------
-    # If <= 7 products, distribute sequentially.
+    # Seven or fewer products.
     # --------------------------------------------------------
 
     if count <= 7:
@@ -204,7 +247,9 @@ def assign_balanced_dates(
     # Target quantity per day
     # ========================================================
 
-    target = total_quantity / 7
+    target = (
+        total_quantity / 7
+    )
 
 
     # ========================================================
@@ -389,7 +434,7 @@ def sort_planned_rows(
 
 
     # --------------------------------------------------------
-    # Remove merged cells temporarily.
+    # Temporarily remove merged cells.
     # --------------------------------------------------------
 
     for rng in list(
@@ -397,10 +442,13 @@ def sort_planned_rows(
     ):
 
         try:
+
             worksheet.unmerge_cells(
                 str(rng)
             )
+
         except Exception:
+
             pass
 
 
@@ -489,6 +537,10 @@ def sort_planned_rows(
             1
         )
 
+
+        # ----------------------------------------------------
+        # Handles Week 52 -> Week 1.
+        # ----------------------------------------------------
 
         week_rank = (
             week
@@ -702,12 +754,12 @@ st.title(
 
 st.write(
     "Automatically plan production using loom capacity, "
-    "External Document No. and production weeks."
+    "External Document No., production week and calendar date."
 )
 
 
 # ============================================================
-# FILE UPLOAD
+# UPLOAD
 # ============================================================
 
 st.subheader(
@@ -819,7 +871,7 @@ if run_button:
 
 
     # ========================================================
-    # READ SETTINGS
+    # READ LOOM SETTINGS
     # ========================================================
 
     loom_settings = {}
@@ -911,7 +963,7 @@ if run_button:
 
 
     # ========================================================
-    # FIXED INPUT COLUMNS
+    # COLUMN STRUCTURE
     # ========================================================
     #
     # A = No.
@@ -921,7 +973,6 @@ if run_button:
     # E = Roll Length
     # F = Quantity
     # G = Loom
-    #
     # H = Production Week
     # I = Production Date
     # J = Day
@@ -960,7 +1011,7 @@ if run_button:
 
 
     # ========================================================
-    # CLEAR OLD OUTPUT
+    # CLEAR PREVIOUS OUTPUT
     # ========================================================
 
     for row in range(
@@ -1051,7 +1102,7 @@ if run_button:
 
 
     # ========================================================
-    # ASSIGN WEEKS
+    # ASSIGN PRODUCTION WEEKS
     # ========================================================
 
     row_week = {}
@@ -1091,7 +1142,7 @@ if run_button:
 
 
         # ----------------------------------------------------
-        # Process documents in original order.
+        # External Document No. order is preserved.
         # ----------------------------------------------------
 
         for document, document_rows in (
@@ -1113,10 +1164,7 @@ if run_button:
 
 
                 # ------------------------------------------------
-                # DO NOT SPLIT PRODUCT.
-                #
-                # If it doesn't fit in the remaining weekly
-                # capacity, move it to next week.
+                # Do NOT split a product.
                 # ------------------------------------------------
 
                 if (
@@ -1149,7 +1197,7 @@ if run_button:
 
 
                 # ------------------------------------------------
-                # Preserve original sequence.
+                # Preserve order.
                 # ------------------------------------------------
 
                 row_sequence[
@@ -1160,7 +1208,7 @@ if run_button:
 
 
                 # ------------------------------------------------
-                # Update load.
+                # Update weekly quantity.
                 # ------------------------------------------------
 
                 current_load += quantity
@@ -1174,10 +1222,6 @@ if run_button:
                         current_week
                     )
 
-
-        # ----------------------------------------------------
-        # Save summary.
-        # ----------------------------------------------------
 
         loom_summary[
             loom
@@ -1209,8 +1253,6 @@ if run_button:
 
     # --------------------------------------------------------
     # Planning year.
-    #
-    # Uses current year automatically.
     # --------------------------------------------------------
 
     planning_year = date.today().year
@@ -1222,12 +1264,12 @@ if run_button:
             continue
 
 
-        # ----------------------------------------------------
-        # Group rows by week.
-        # ----------------------------------------------------
-
         week_rows = {}
 
+
+        # ----------------------------------------------------
+        # Group by production week.
+        # ----------------------------------------------------
 
         for row, week in row_week.items():
 
@@ -1291,12 +1333,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # Week start.
-            #
-            # datetime automatically handles:
-            # Jan 31 → Feb 1
-            # Feb 28/29 → Mar 1
-            # etc.
+            # Calculate Monday automatically.
             # ------------------------------------------------
 
             week_start_date = (
@@ -1308,7 +1345,7 @@ if run_button:
 
 
             # ------------------------------------------------
-            # Spread products across the week.
+            # Spread products across Monday-Sunday.
             # ------------------------------------------------
 
             assignments = (
@@ -1343,10 +1380,6 @@ if run_button:
         )
 
 
-        # ----------------------------------------------------
-        # Production Week
-        # ----------------------------------------------------
-
         worksheet.cell(
             row=row,
             column=WEEK_COL
@@ -1354,10 +1387,6 @@ if run_button:
             f"WK-{week}"
         )
 
-
-        # ----------------------------------------------------
-        # Production Date
-        # ----------------------------------------------------
 
         worksheet.cell(
             row=row,
@@ -1374,10 +1403,6 @@ if run_button:
             "DD-MM-YYYY"
         )
 
-
-        # ----------------------------------------------------
-        # Day
-        # ----------------------------------------------------
 
         worksheet.cell(
             row=row,
@@ -1419,7 +1444,7 @@ if run_button:
 
 
     # ========================================================
-    # SAVE FILE
+    # SAVE
     # ========================================================
 
     output = BytesIO()
