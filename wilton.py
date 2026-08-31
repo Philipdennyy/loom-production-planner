@@ -251,18 +251,10 @@ if run_button:
     # Check required sheet
     # --------------------------------------------------------
 
-    SHEET_NAME = "Loom wise Structure"
-
-    if SHEET_NAME not in workbook.sheetnames:
-
-        st.error(
-            f"Sheet '{SHEET_NAME}' was not found in the Excel file."
-        )
-
-        st.stop()
 
 
-    worksheet = workbook[SHEET_NAME]
+
+    worksheet = workbook[workbook.sheetnames[0]]
 
 
     # ========================================================
