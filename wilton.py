@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
 from io import BytesIO
+from datetime import date, timedelta
 
 
 # ============================================================
@@ -65,14 +66,48 @@ def clean_loom_name(loom):
 
 
 # ============================================================
+# GET DATE FOR PRODUCTION WEEK
+# ============================================================
+
+def get_week_start_date(
+    production_week,
+    starting_week,
+    planning_start_date
+):
+    """
+    Finds the starting date of a production week.
+
+    Example:
+    Planning start date = 31-Aug-2026
+    Starting week = 33
+
+    WK-33 = 31-Aug-2026
+    WK-34 = 07-Sep-2026
+    WK-35 = 14-Sep-2026
+
+    Handles:
+    WK-52 -> WK-1
+    """
+
+    week_difference = (
+        production_week - starting_week
+    ) % 52
+
+    return (
+        planning_start_date
+        + timedelta(days=week_difference * 7)
+    )
+
+
+# ============================================================
 # TITLE
 # ============================================================
 
 st.title("🏭 Loom Production Planner")
 
 st.write(
-    "Upload the production Excel file, configure the loom settings, "
-    "and automatically assign production weeks."
+    "Automatically assign production weeks and production dates "
+    "based on loom capacity and quantity."
 )
 
 
@@ -85,6 +120,23 @@ st.subheader("1️⃣ Upload Production Excel")
 uploaded_file = st.file_uploader(
     "Select the Excel file",
     type=["xlsx"]
+)
+
+
+# ============================================================
+# PLANNING DATE
+# ============================================================
+
+st.subheader("📅 Planning Start Date")
+
+planning_start_date = st.date_input(
+    "Select the date from which the production planning should start",
+    value=date.today()
+)
+
+st.caption(
+    "This date represents the beginning of the selected starting week. "
+    "Each following production week covers 7 days."
 )
 
 
@@ -127,7 +179,7 @@ edited_settings = st.data_editor(
 
         "Starting Week": st.column_config.NumberColumn(
             "Starting Week",
-            help="Week from which this loom should start.",
+            help="Production week from which this loom should start.",
             min_value=1,
             max_value=52,
             step=1
@@ -179,14 +231,16 @@ if run_button:
 
     if uploaded_file is None:
 
-        st.error("Please upload the Excel file first.")
+        st.error(
+            "Please upload the Excel file first."
+        )
 
         st.stop()
 
 
-    # --------------------------------------------------------
-    # Create loom settings dictionary
-    # --------------------------------------------------------
+    # ========================================================
+    # CREATE LOOM SETTINGS
+    # ========================================================
 
     loom_settings = {}
 
@@ -201,7 +255,9 @@ if run_button:
         starting_week = int(row["Starting Week"])
 
 
+        # ----------------------------------------------------
         # Validation
+        # ----------------------------------------------------
 
         if capacity <= 0:
 
@@ -255,30 +311,36 @@ if run_button:
 
     if not workbook.sheetnames:
 
-        st.error("The Excel file contains no worksheets.")
+        st.error(
+            "The Excel file contains no worksheets."
+        )
 
         st.stop()
 
 
-    worksheet = workbook[workbook.sheetnames[0]]
+    worksheet = workbook[
+        workbook.sheetnames[0]
+    ]
 
 
     # ========================================================
     # FIXED INPUT COLUMNS
     # ========================================================
 
-    # A = No.
-    # B = External Document
-    # C = Description
-    # D = Roll Width
-    # E = Roll Length
     # F = Quantity
     # G = Loom
-    # H = Production Week / empty
+    #
+    # H = Production Week
+    # I = Production Date
+    #
+    # If H/I are occupied by other data, new columns
+    # will be inserted safely.
 
     QUANTITY_COL = 6
     LOOM_COL = 7
+
     PRODUCTION_WEEK_COL = 8
+    PRODUCTION_DATE_COL = 9
 
 
     # ========================================================
@@ -298,7 +360,9 @@ if run_button:
 
     if (
         h_header is not None
-        and str(h_header).strip().lower() == "production week"
+        and
+        str(h_header).strip().lower()
+        == "production week"
     ):
 
         production_week_col = 8
@@ -314,7 +378,11 @@ if run_button:
             row=row,
             column=PRODUCTION_WEEK_COL
         ).value is None
-        for row in range(1, worksheet.max_row + 1)
+
+        for row in range(
+            1,
+            worksheet.max_row + 1
+        )
     ):
 
         production_week_col = 8
@@ -332,7 +400,6 @@ if run_button:
 
     else:
 
-        # Insert a new column H
         worksheet.insert_cols(8)
 
         production_week_col = 8
@@ -342,24 +409,86 @@ if run_button:
             column=production_week_col
         ).value = "Production Week"
 
-        # Loom and Quantity remain F and G because the
-        # new column was inserted after them.
+
+    # ========================================================
+    # PRODUCTION DATE COLUMN
+    # ========================================================
+
+    production_date_col = production_week_col + 1
+
+
+    i_header = worksheet.cell(
+        row=1,
+        column=production_date_col
+    ).value
+
+
+    # --------------------------------------------------------
+    # If I already contains Production Date
+    # --------------------------------------------------------
+
+    if (
+        i_header is not None
+        and
+        str(i_header).strip().lower()
+        == "production date"
+    ):
+
+        pass
+
+
+    # --------------------------------------------------------
+    # If I contains something else
+    # insert a new column
+    # --------------------------------------------------------
+
+    elif any(
+        worksheet.cell(
+            row=row,
+            column=production_date_col
+        ).value is not None
+
+        for row in range(
+            1,
+            worksheet.max_row + 1
+        )
+    ):
+
+        worksheet.insert_cols(
+            production_date_col
+        )
+
+
+    # Set header
+
+    worksheet.cell(
+        row=1,
+        column=production_date_col
+    ).value = "Production Date"
 
 
     # ========================================================
-    # CLEAR PRODUCTION WEEK COLUMN
+    # CLEAR OLD OUTPUT
     # ========================================================
 
-    for row in range(2, worksheet.max_row + 1):
+    for row in range(
+        2,
+        worksheet.max_row + 1
+    ):
 
         worksheet.cell(
             row=row,
             column=production_week_col
         ).value = None
 
+        worksheet.cell(
+            row=row,
+            column=production_date_col
+        ).value = None
+
 
     # ========================================================
-    # PROCESS LOOMS
+    # PROCESS EACH LOOM
     # ========================================================
 
     summary = []
@@ -378,7 +507,9 @@ if run_button:
 
         capacity = settings["capacity"]
 
-        current_week = settings["starting_week"]
+        starting_week = settings["starting_week"]
+
+        current_week = starting_week
 
         current_load = 0
 
@@ -386,10 +517,23 @@ if run_button:
 
         weeks_used = set()
 
+        dates_used = set()
 
-        # ----------------------------------------------------
-        # Process rows in original Excel order
-        # ----------------------------------------------------
+
+        # ====================================================
+        # DAILY CAPACITY
+        # ====================================================
+
+        daily_capacity = capacity / 7
+
+        current_day_load = 0
+
+        current_date = planning_start_date
+
+
+        # ====================================================
+        # PROCESS EXCEL ROWS
+        # ====================================================
 
         for excel_row in range(
             2,
@@ -397,9 +541,9 @@ if run_button:
         ):
 
 
-            # -----------------------------------------------
+            # ------------------------------------------------
             # Read loom
-            # -----------------------------------------------
+            # ------------------------------------------------
 
             excel_loom = worksheet.cell(
                 row=excel_row,
@@ -412,18 +556,18 @@ if run_button:
             )
 
 
-            # -----------------------------------------------
-            # Only process this loom
-            # -----------------------------------------------
+            # ------------------------------------------------
+            # Only process matching loom
+            # ------------------------------------------------
 
             if cleaned_excel_loom != loom:
 
                 continue
 
 
-            # -----------------------------------------------
+            # ------------------------------------------------
             # Read quantity
-            # -----------------------------------------------
+            # ------------------------------------------------
 
             quantity = worksheet.cell(
                 row=excel_row,
@@ -436,9 +580,9 @@ if run_button:
                 continue
 
 
-            # -----------------------------------------------
+            # ------------------------------------------------
             # Convert quantity
-            # -----------------------------------------------
+            # ------------------------------------------------
 
             try:
 
@@ -450,12 +594,12 @@ if run_button:
 
 
             # =================================================
-            # CAPACITY CHECK
+            # WEEKLY ALLOCATION
             # =================================================
 
             if current_load + quantity <= capacity:
 
-                # Quantity fits current week
+                # Order fits current week
 
                 assigned_week = current_week
 
@@ -464,15 +608,12 @@ if run_button:
 
             else:
 
-                # Quantity doesn't fit
                 # Move entire order to next week
 
                 current_week += 1
 
 
-                # ------------------------------------------------
-                # WEEK 52 → WEEK 1
-                # ------------------------------------------------
+                # WK-52 → WK-1
 
                 if current_week > 52:
 
@@ -485,7 +626,196 @@ if run_button:
 
 
             # =================================================
-            # WRITE PRODUCTION WEEK
+            # GET WEEK START DATE
+            # =================================================
+
+            week_start_date = get_week_start_date(
+                assigned_week,
+                starting_week,
+                planning_start_date
+            )
+
+
+            # =================================================
+            # DAILY DATE ALLOCATION
+            # =================================================
+
+            # If the week changed, start from the first
+            # available day of that week.
+
+            if assigned_week != starting_week:
+
+                pass
+
+
+            # -------------------------------------------------
+            # Determine how much of this order goes onto
+            # each day.
+            # -------------------------------------------------
+
+            remaining_quantity = quantity
+
+
+            # -------------------------------------------------
+            # Find the first date for this order.
+            #
+            # We maintain daily loads separately for each
+            # production week.
+            # -------------------------------------------------
+
+            if (
+                not hasattr(
+                    st.session_state,
+                    "_daily_loads"
+                )
+            ):
+
+                st.session_state._daily_loads = {}
+
+
+            # Key = (loom, production_week, date)
+
+            # Find first available day in this week
+
+            assigned_date = None
+
+
+            for day_number in range(7):
+
+                possible_date = (
+                    week_start_date
+                    + timedelta(days=day_number)
+                )
+
+
+                key = (
+                    loom,
+                    assigned_week,
+                    possible_date
+                )
+
+
+                if key not in st.session_state._daily_loads:
+
+                    st.session_state._daily_loads[key] = 0
+
+
+                available_capacity = (
+                    daily_capacity
+                    - st.session_state._daily_loads[key]
+                )
+
+
+                if available_capacity > 0:
+
+                    assigned_date = possible_date
+
+                    quantity_for_day = min(
+                        remaining_quantity,
+                        available_capacity
+                    )
+
+
+                    st.session_state._daily_loads[key] += (
+                        quantity_for_day
+                    )
+
+
+                    remaining_quantity -= (
+                        quantity_for_day
+                    )
+
+
+                    dates_used.add(
+                        possible_date
+                    )
+
+
+                    if remaining_quantity <= 0:
+
+                        break
+
+
+            # -------------------------------------------------
+            # If quantity is larger than the capacity of
+            # one week, continue into subsequent weeks.
+            # -------------------------------------------------
+
+            while remaining_quantity > 0:
+
+                current_week += 1
+
+                if current_week > 52:
+
+                    current_week = 1
+
+
+                next_week_start = get_week_start_date(
+                    current_week,
+                    starting_week,
+                    planning_start_date
+                )
+
+
+                for day_number in range(7):
+
+                    possible_date = (
+                        next_week_start
+                        + timedelta(days=day_number)
+                    )
+
+
+                    key = (
+                        loom,
+                        current_week,
+                        possible_date
+                    )
+
+
+                    if key not in st.session_state._daily_loads:
+
+                        st.session_state._daily_loads[key] = 0
+
+
+                    available_capacity = (
+                        daily_capacity
+                        - st.session_state._daily_loads[key]
+                    )
+
+
+                    if available_capacity <= 0:
+
+                        continue
+
+
+                    quantity_for_day = min(
+                        remaining_quantity,
+                        available_capacity
+                    )
+
+
+                    st.session_state._daily_loads[key] += (
+                        quantity_for_day
+                    )
+
+
+                    remaining_quantity -= (
+                        quantity_for_day
+                    )
+
+
+                    dates_used.add(
+                        possible_date
+                    )
+
+
+                    if remaining_quantity <= 0:
+
+                        break
+
+
+            # =================================================
+            # WRITE WEEK
             # =================================================
 
             worksheet.cell(
@@ -494,9 +824,29 @@ if run_button:
             ).value = f"WK-{assigned_week}"
 
 
+            # =================================================
+            # WRITE PRODUCTION DATE
+            # =================================================
+
+            if assigned_date is not None:
+
+                worksheet.cell(
+                    row=excel_row,
+                    column=production_date_col
+                ).value = assigned_date
+
+
+                worksheet.cell(
+                    row=excel_row,
+                    column=production_date_col
+                ).number_format = "DD-MM-YYYY"
+
+
             rows_processed += 1
 
-            weeks_used.add(assigned_week)
+            weeks_used.add(
+                assigned_week
+            )
 
 
         # ====================================================
@@ -511,8 +861,11 @@ if run_button:
 
                 "Weekly Capacity": capacity,
 
+                "Daily Capacity":
+                    round(daily_capacity, 2),
+
                 "Starting Week":
-                    f"WK-{settings['starting_week']}",
+                    f"WK-{starting_week}",
 
                 "Final Week":
                     f"WK-{current_week}",
@@ -526,7 +879,7 @@ if run_button:
 
 
     # ========================================================
-    # SAVE EXCEL TO MEMORY
+    # SAVE OUTPUT
     # ========================================================
 
     output = BytesIO()
@@ -554,7 +907,9 @@ if run_button:
 
     if summary:
 
-        summary_df = pd.DataFrame(summary)
+        summary_df = pd.DataFrame(
+            summary
+        )
 
         st.dataframe(
             summary_df,
@@ -565,7 +920,7 @@ if run_button:
     else:
 
         st.info(
-            "No enabled loom data was found in the Excel file."
+            "No enabled loom data was found."
         )
 
 
@@ -581,7 +936,9 @@ if run_button:
 
         data=output,
 
-        file_name="Loom_wise_Production_Planning_Automated.xlsx",
+        file_name=(
+            "Loom_wise_Production_Planning_Automated.xlsx"
+        ),
 
         mime=(
             "application/vnd.openxmlformats-officedocument."
